@@ -2,7 +2,9 @@
 title: | 
   | Local Elections 2022:
   | What difference did electoral cooperation make?
-author: "Owen Winter"
+author:
+- "Owen Winter"
+- "owenwinter.co.uk"
 date: "13/05/2022"
 output:
   pdf_document:
@@ -37,7 +39,7 @@ This paper considers the effect of electoral collaboration on progressive party 
 
 # Data
 
-The data used here comes from two main sources. Election data is provided by Democracy Club through their open-access API [@longairDemocracyClubCandidates2022] while ward-level census results are aggregated by myself using data from InFuse [@InFuse2014]. Only wards with full 2018 and 2022 results which can be matched to census data are included. This reduces the size of the sample to 1,913 in England and excludes some councils entirely.
+The data used here comes from two main sources. Election data is provided by Democracy Club through their open-access API [@longairDemocracyClubCandidates2022] while ward-level census results are aggregated by myself using data from InFuse [@InFuse2014]. Only wards with full 2018 and 2022 results which can be matched to census data are included. This reduces the size of the sample to 1,847 in England and excludes some councils entirely.
 
 ```{r data cleaning, include=FALSE}
 
@@ -137,7 +139,7 @@ analysis <- analysis[which(!is.na(analysis$bornUK_pct)),]
 
 # Method
 
-The method used in this research is called "Coarsened Exact Matching" (CEM) [@iacusCausalInferenceBalance2012]. With any analysis of election results, there is a risk of ommitted variable bias. CEM is one way to try and find the true "causal effect" of a variable. CEM is relatively intuitive: it is a way of comparing data which is almost exactly identical in all regards aside from the effect we are testing. Data is 'coarsened', so continuous variables can be placed into categories, and data points which are an exact match are compared. In this research, the data is matched by 2018 vote share of the Conservatives, Labour, Liberal Democrats, Greens, independents, UKIP and 'others'; the percentage of residents born in the UK, retired, white, not deprived, who live in privately rented accomodation, and who have no qualifications.
+The method used in this research is called "Coarsened Exact Matching" (CEM) [@iacusCausalInferenceBalance2012]. With any analysis of election results, there is a risk of omitted variable bias. CEM is one way to try and find the true "causal effect" of a variable. CEM is relatively intuitive: it is a way of comparing data which is almost exactly identical in all regards aside from the effect we are testing. Data is 'coarsened', so continuous variables can be placed into categories, and data points which are an exact match are compared. In this research, the data is matched by 2018 vote share of the Conservatives, Labour, Liberal Democrats, Greens, independents, UKIP and 'others'; the percentage of residents born in the UK, retired, white, not deprived, who live in privately rented accommodation, and who have no qualifications.
 
 For each variable, the data is coarsened into 10% categories (0-10%,10-20% etc). For example, in Norton Canes ward in Cannock Chase, Labour was the only progressive party standing in 2022. Norton Canes was a narrow Labour win vs Conservative in 2018, is over 90% white and less than 10% of people privately rent. The results in Norton Canes are compared against Codnor and Waingroves in Amber Valley, Whitton in Ipswich and Wakefield West in Wakefield. Each of these wards were a narrow Labour win vs Conservative in 2018, over 90% white and less than 10% private rent _but_ in these three wards the Liberal Democrats and Greens also fielded a candidate.
 
