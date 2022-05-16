@@ -1,0 +1,411 @@
+---
+title: | 
+  | Local Elections 2022:
+  | What difference did electoral cooperation make?
+author: "Owen Winter"
+date: "13/05/2022"
+output:
+  pdf_document:
+    fig_crop: FALSE
+bibliography: references.bib
+link-citations: yes
+linkcolor: blue
+nocite: |
+  @luvsandorjCoarsenedExactMatching2021
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+list.of.packages <- c("tidyverse","MatchIt","lmtest","sandwich","readxl","modelsummary",
+                      "kableExtra")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+devtools::install_github("owenwntr/owtheme")
+
+library(tidyverse)
+library(MatchIt)
+library(lmtest)
+library(sandwich)
+library(readxl)
+library(modelsummary)
+library(kableExtra)
+library(owtheme)
+```
+
+This paper considers the effect of electoral collaboration on progressive party vote shares in the 2022 English local elections. Parties included as "progressive" are Labour, the Liberal Democrats and Green Party of England and Wales.
+
+# Data
+
+The data used here comes from two main sources. Election data is provided by Democracy Club through their open-access API [@longairDemocracyClubCandidates2022] while ward-level census results are aggregated by myself using data from InFuse [@InFuse2014]. Only wards with full 2018 and 2022 results which can be matched to census data are included. This reduces the size of the sample to 1,913 in England and excludes some councils entirely.
+
+```{r data cleaning, include=FALSE}
+
+dc_results <- read.csv("data/democracyclub.csv")
+
+dc_results$ward_code <- paste(dc_results$la,dc_results$ward,sep=".")
+
+dc_results$concand <- 0
+dc_results$concand[which(dc_results$con22>0)] <- 1
+
+dc_results$labcand <- 0
+dc_results$labcand[which(dc_results$lab22>0)] <- 1
+
+dc_results$ldcand <- 0
+dc_results$ldcand[which(dc_results$ld22>0)] <- 1
+
+dc_results$greencand <- 0
+dc_results$greencand[which(dc_results$green22>0)] <- 1
+
+dc_results$indcand <- 0
+dc_results$indcand[which(dc_results$ind22>0)] <- 1
+
+dc_results$ukipcand <- 0
+dc_results$ukipcand[which(dc_results$ukip22>0)] <- 1
+
+dc_results$plaidcand <- 0
+dc_results$plaidcand[which(dc_results$plaid22>0)] <- 1
+
+dc_results$othercand <- 0
+dc_results$othercand[which(dc_results$other22>0)] <- 1
+
+dc_results$sumpa <- dc_results$labcand + dc_results$ldcand + dc_results$greencand + dc_results$plaidcand
+
+results22 <- dc_results[which(dc_results$date=="2022-05-05"),]
+results18 <- dc_results[which(dc_results$date=="2018-05-03"),]
+
+colnames(results18)[8:15] <- c("con18","lab18","ld18","green18","ind18","ukip18","plaid18","other18")
+colnames(results18)[21:29] <- c("concand18","labcand18","ldcand18","greencand18","indcand18","ukipcand18","plaidcand18","othercand18","sumpa18")
+
+results_full <- results22
+results_full[,30:47] <- results18[match(results_full$ward_code,results18$ward_code),c(8:15,20:29)]
+
+results_full$totalvote22 <- results_full$con22+results_full$lab22+
+  results_full$ld22+results_full$green22+results_full$ind22+results_full$ukip22+
+  results_full$plaid22+results_full$other22
+
+results_full$totalvote18 <- results_full$con18+results_full$lab18+
+  results_full$ld18+results_full$green18+results_full$ind18+results_full$ukip18+
+  results_full$plaid18+results_full$other18
+
+results_full <- results_full[which((!is.na(results_full$totalvote18))&(!is.na(results_full$totalvote22))),]
+
+results_full$con18_pct <- results_full$con18/results_full$totalvote18
+results_full$lab18_pct <- results_full$lab18/results_full$totalvote18
+results_full$ld18_pct <- results_full$ld18/results_full$totalvote18
+results_full$green18_pct <- results_full$green18/results_full$totalvote18
+results_full$ind18_pct <- results_full$ind18/results_full$totalvote18
+results_full$ukip18_pct <- results_full$ukip18/results_full$totalvote18
+results_full$plaid18_pct <- results_full$plaid18/results_full$totalvote18
+results_full$other18_pct <- results_full$other18/results_full$totalvote18
+
+results_full$con22_pct <- results_full$con22/results_full$totalvote22
+results_full$lab22_pct <- results_full$lab22/results_full$totalvote22
+results_full$ld22_pct <- results_full$ld22/results_full$totalvote22
+results_full$green22_pct <- results_full$green22/results_full$totalvote22
+results_full$ind22_pct <- results_full$ind22/results_full$totalvote22
+results_full$ukip22_pct <- results_full$ukip22/results_full$totalvote22
+results_full$plaid22_pct <- results_full$plaid22/results_full$totalvote22
+results_full$other22_pct <- results_full$other22/results_full$totalvote22
+
+wardnames <- read_excel("data/WD21_LAD21_UK_LU.xlsx")
+
+wardnames$new_la <- tolower(str_replace_all(wardnames$LAD21NM," ","-"))
+wardnames$new_ward <- tolower(str_replace_all(wardnames$WD21NM," ","-"))
+wardnames$dc_code <- paste(wardnames$new_la,wardnames$new_ward,sep=".")
+results_full$ons <- wardnames$WD21CD[match(results_full$ward_code,wardnames$dc_code)]
+
+analysis <- results_full[which(!is.na(results_full$ons)),
+                         c("ward_code","concand","labcand","ldcand","greencand","plaidcand",
+                           "sumpa","concand18","labcand18","ldcand18","greencand18",
+                        "plaidcand18","sumpa18","con18_pct","lab18_pct","ld18_pct",
+                        "green18_pct","ind18_pct","ukip18_pct","plaid18_pct",
+                        "other18_pct","con22_pct","lab22_pct","ld22_pct",
+                        "green22_pct","ind22_pct","ukip22_pct","plaid22_pct",
+                        "other22_pct","ons")]
+load("data/ward_census_data.rda")
+
+analysis$bornUK_pct <- wards$bornUK_pct[match(analysis$ons,wards$ward)]
+analysis$retired_pct <- wards$retired_pct[match(analysis$ons,wards$ward)]
+analysis$white_pct <- wards$white_pct[match(analysis$ons,wards$ward)]
+analysis$notdeprived_pct <- wards$notdeprived_pct[match(analysis$ons,wards$ward)]
+analysis$noqual <- wards$noqual[match(analysis$ons,wards$ward)]
+analysis$private_rented_pct <- wards$private_rented_pct[match(analysis$ons,wards$ward)]
+
+analysis <- analysis[which(!is.na(analysis$bornUK_pct)),]
+```
+
+# Method
+
+The method used in this research is called "Coarsened Exact Matching" (CEM) [@iacusCausalInferenceBalance2012]. With any analysis of election results, there is a risk of ommitted variable bias. CEM is one way to try and find the true "causal effect" of a variable. CEM is relatively intuitive: it is a way of comparing data which is almost exactly identical in all regards aside from the effect we are testing. Data is 'coarsened', so continuous variables can be placed into categories, and data points which are an exact match are compared. In this research, the data is matched by 2018 vote share of the Conservatives, Labour, Liberal Democrats, Greens, independents, UKIP and 'others'; the percentage of residents born in the UK, retired, white, not deprived, who live in privately rented accomodation, and who have no qualifications.
+
+For each variable, the data is coarsened into 10% categories (0-10%,10-20% etc). For example, in Norton Canes ward in Cannock Chase, Labour was the only progressive party standing in 2022. Norton Canes was a narrow Labour win vs Conservative in 2018, is over 90% white and less than 10% of people privately rent. The results in Norton Canes are compared against Codnor and Waingroves in Amber Valley, Whitton in Ipswich and Wakefield West in Wakefield. Each of these wards were a narrow Labour win vs Conservative in 2018, over 90% white and less than 10% private rent _but_ in these three wards the Liberal Democrats and Greens also fielded a candidate.
+
+This does not necessarily mean there was a formal deal in place, in many areas the parties would simply be unable to find a candidate to stand, but it shows the effect of a sole progressive candidate.
+
+```{r matching, include=FALSE}
+
+cutpoints <- list(con18_pct = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  lab18_pct = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  ld18_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  green18_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  ind18_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  ukip18_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  other18_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  bornUK_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  retired_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  white_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  notdeprived_pct  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),
+                  noqual  = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9), 
+                  private_rented_pct = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+
+analysis$pa22 <- 0
+analysis$pa22[which(analysis$sumpa==1)] <- 1
+
+#Labour 
+
+labmatching <- matchit(pa22 ~ con18_pct + lab18_pct + ld18_pct +
+                       green18_pct + ind18_pct + ukip18_pct + other18_pct +
+                       bornUK_pct + retired_pct + white_pct + notdeprived_pct +
+                       noqual + private_rented_pct,
+                       data = analysis[which(analysis$labcand==1),], 
+                     method = 'cem', estimand = 'ATE',cutpoints=cutpoints)
+
+lab_matched <- match.data(labmatching) %>% arrange(subclass, pa22)
+
+labmodel <- lm(lab22_pct ~ lab18_pct + pa22, data = lab_matched, weights = weights)
+coeftest(labmodel, vcov. = vcovCL, cluster = ~subclass)
+
+# Lib Dem
+
+ldmatching <- matchit(pa22 ~ con18_pct + lab18_pct + ld18_pct +
+                         green18_pct + ind18_pct + ukip18_pct + other18_pct +
+                         bornUK_pct + retired_pct + white_pct + notdeprived_pct +
+                         noqual + private_rented_pct,
+                       data = analysis[which(analysis$ldcand==1),], 
+                       method = 'cem', estimand = 'ATE',cutpoints=cutpoints)
+
+ld_matched <- match.data(ldmatching) %>% arrange(subclass, pa22)
+
+ldmodel <- lm(ld22_pct ~ ld18_pct + pa22, data = ld_matched, weights = weights)
+coeftest(ldmodel, vcov. = vcovCL, cluster = ~subclass)
+
+
+# Green
+
+green_cutpoints = list(con18_pct = c(0.2,0.4,0.6,0.8),
+                       lab18_pct = c(0.2,0.4,0.6,0.8),
+                       ld18_pct  = c(0.2,0.4,0.6,0.8),
+                       green18_pct  = c(0.2,0.4,0.6,0.8),
+                       ind18_pct  = c(0.2,0.4,0.6,0.8),
+                       ukip18_pct  = c(0.2,0.4,0.6,0.8),
+                       other18_pct  = c(0.2,0.4,0.6,0.8),
+                       bornUK_pct  = c(0.2,0.4,0.6,0.8),
+                       retired_pct  = c(0.2,0.4,0.6,0.8),
+                       white_pct  = c(0.2,0.4,0.6,0.8),
+                       notdeprived_pct  = c(0.2,0.4,0.6,0.8),
+                       noqual  = c(0.2,0.4,0.6,0.8), 
+                       private_rented_pct = c(0.2,0.4,0.6,0.8))
+
+greenmatching <- matchit(pa22 ~ con18_pct + lab18_pct + ld18_pct +
+                        green18_pct + ind18_pct + ukip18_pct + other18_pct +
+                        bornUK_pct + retired_pct + white_pct + notdeprived_pct +
+                        noqual + private_rented_pct,
+                      data = analysis[which(analysis$greencand==1),], 
+                      method = 'cem', estimand = 'ATE',cutpoints=green_cutpoints)
+
+green_matched <- match.data(greenmatching) %>% arrange(subclass, pa22)
+
+greenmodel <- lm(green22_pct ~ green18_pct + pa22, data = green_matched, weights = weights)
+coeftest(greenmodel, vcov. = vcovCL, cluster = ~subclass)
+
+# Conservative
+
+conmatching <- matchit(pa22 ~ con18_pct + lab18_pct + ld18_pct +
+                           green18_pct + ind18_pct + ukip18_pct + other18_pct +
+                           bornUK_pct + retired_pct + white_pct + notdeprived_pct +
+                           noqual + private_rented_pct,
+                         data = analysis[which(analysis$con22_pct>0),], 
+                         method = 'cem', estimand = 'ATE',cutpoints=cutpoints)
+
+con_matched <- match.data(conmatching) %>% arrange(subclass, pa22)
+
+conmodel <- lm(con22_pct ~ con18_pct + pa22, data = con_matched, weights = weights)
+coeftest(conmodel, vcov. = vcovCL, cluster = ~subclass)
+
+```
+
+# Results
+
+The results of the CEM analysis are plotted below. The chart shows the average predicted vote share for parties with and without a single progressive alliance candidate. For Labour, the Liberal Democrats and the Green Party, this means the wards where they were the single candidate. For the Green Party, the sample size is too small for matching using 10% categories so they are extended to 20%. This means the Green result should be taken as indicative rather than an accurate causal estimate.  
+  
+
+
+```{r results, echo=FALSE}
+
+plot_data <- data.frame(party=c("Conservative","Labour","Liberal Democrat","Green",
+                                "Conservative","Labour","Liberal Democrat","Green"),
+                        pa=c(0,0,0,0,1,1,1,1),
+                   mean18 = c(mean(analysis$con18_pct[which(analysis$con22_pct>0)]),
+                              mean(analysis$lab18_pct[which(analysis$lab22_pct>0)]),
+                              mean(analysis$ld18_pct[which(analysis$ld22_pct>0)]),
+                              mean(analysis$green18_pct[which(analysis$green22_pct>0)]),
+                              mean(analysis$con18_pct[which(analysis$con22_pct>0)]),
+                              mean(analysis$lab18_pct[which(analysis$lab22_pct>0)]),
+                              mean(analysis$ld18_pct[which(analysis$ld22_pct>0)]),
+                              mean(analysis$green18_pct[which(analysis$green22_pct>0)])))
+
+plot_data$pred22 <- NA
+plot_data$pred22[which((plot_data$party=="Conservative")&(plot_data$pa==0))] <- coef(conmodel)["(Intercept)"] + 
+  coef(conmodel)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)])
+plot_data$pred22[which((plot_data$party=="Labour")&(plot_data$pa==0))] <- coef(labmodel)["(Intercept)"] + 
+  coef(labmodel)["lab18_pct"]*mean(analysis$lab18_pct[which(analysis$lab22_pct>0)])
+plot_data$pred22[which((plot_data$party=="Liberal Democrat")&(plot_data$pa==0))]  <- coef(ldmodel)["(Intercept)"] + 
+  coef(ldmodel)["ld18_pct"]*mean(analysis$ld18_pct[which(analysis$ld22_pct>0)])
+plot_data$pred22[which((plot_data$party=="Green")&(plot_data$pa==0))]  <- coef(greenmodel)["(Intercept)"] + 
+  coef(greenmodel)["green18_pct"]*mean(analysis$green18_pct[which(analysis$green22_pct>0)])
+
+plot_data$pred22[which((plot_data$party=="Conservative")&(plot_data$pa==1))] <- coef(conmodel)["(Intercept)"] + 
+  coef(conmodel)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)]) + coef(conmodel)["pa22"]
+plot_data$pred22[which((plot_data$party=="Labour")&(plot_data$pa==1))] <- coef(labmodel)["(Intercept)"] + 
+  coef(labmodel)["lab18_pct"]*mean(analysis$lab18_pct[which(analysis$lab22_pct>0)]) + coef(labmodel)["pa22"]
+plot_data$pred22[which((plot_data$party=="Liberal Democrat")&(plot_data$pa==1))]  <- coef(ldmodel)["(Intercept)"] + 
+  coef(ldmodel)["ld18_pct"]*mean(analysis$ld18_pct[which(analysis$ld22_pct>0)]) + coef(ldmodel)["pa22"]
+plot_data$pred22[which((plot_data$party=="Green")&(plot_data$pa==1))]  <- coef(greenmodel)["(Intercept)"] + 
+  coef(greenmodel)["green18_pct"]*mean(analysis$green18_pct[which(analysis$green22_pct>0)]) + coef(greenmodel)["pa22"]
+
+plot_data$error <- NA
+plot_data$error[which((plot_data$party=="Conservative"))] <- 0.0388284
+plot_data$error[which((plot_data$party=="Labour"))] <- 0.013481
+plot_data$error[which((plot_data$party=="Liberal Democrat"))]  <- 0.035775
+plot_data$error[which((plot_data$party=="Green"))]  <- 0.096551
+
+plot_data$upper <- plot_data$pred22 + plot_data$error
+plot_data$lower <- plot_data$pred22 - plot_data$error
+
+plot_data$party <- factor(plot_data$party, levels=c("Conservative","Labour","Liberal Democrat","Green"))
+
+ggplot(plot_data, aes(x=party,y=pred22, group=pa, fill=party, alpha=as.factor(pa)))+
+  geom_col(position="dodge") +
+  geom_errorbar(aes(ymax=upper,ymin=lower),width=0.1,position = position_dodge(width=0.9),
+                show.legend = FALSE) +
+  scale_alpha_manual(values=c(0.6,1),labels=c("No","Yes")) +
+  scale_fill_manual(values=c(ow_cols("con","lab","ld","green")),guide="none") +
+  labs(alpha="Single\nProgressive\nCandidate",x="Party",
+       y="Predicted Vote Share 2022") +
+  scale_y_continuous(labels=scales::percent_format(accuracy=1)) +
+  ggtitle("Effect on Conservative, Labour, Liberal Democrat and Green Party\nvote share of only one 'progressive' candidate standing",
+          subtitle = "Causal effect estimated using Coarsened Exact Matching.\n'Progressive' includes Labour, Liberal Democrat and Green.") +
+  geom_vline(xintercept=3.5, lty=2) +
+  geom_text(aes(x=4,y=0.45, label="Small sample,\nindicative only"),size=3,
+            show.legend = FALSE) +
+  theme(plot.title = element_text(margin=margin(30,0,0,0)),
+        plot.subtitle = element_text(margin=margin(10,0,10,0)))
+```
+
+# Discussion
+
+These results show the significant effect on vote share that having a single progressive candidate had. For Labour, this is estimated to increase vote share by 6.1%, while for the Liberal Democrats the effect is 14.1%. Meanwhile, the estimated effect on the Conservative vote share is an increase of 2.9%. This implies that a significant majority of voters for progressive parties will transfer to other progressive parties if their preferred party does not stand a candidate. Given that many wards are won by narrow margins, the effect of sole progressive candidates is likely to have affected the results of hundreds of elections this year.
+
+These statistics should not necessarily be applied to other elections directly. With low turnout, local election electorates are not representative of the general public. Local election voters are likely to be "high engagement" and therefore more likely to transfer predictably between progressive parties. Local elections are also more heavily dependent on on-the-ground campaigning, so the redirection of resources afforded by standing down candidates will likely yield more significant effects. On the other hand, the increased (negative) partisanship associated with General Elections might encourage more tactical behaviour from voters opposed to the Conservative government on a national level
+
+That said, this research shows the effectiveness of cooperation between progressive parties which could be extended beyond a handful of local elections. Voters are more likely to transfer from one progressive party to another when only one progressive candidate is standing.
+
+# R packages
+
+- tidyverse [@tidyverse]
+- MatchIt [@MatchIt]
+- lmtest [@lmtest]
+- sandwich [@sandwich;@sandwich2]
+- readxl [@readxl]
+- modelsummary [@modelsummary]
+- kableExtra [@kableExtra]
+
+# References
+
+<div id="refs"></div>
+
+# Appendix
+
+```{r appendix,echo=FALSE,message=FALSE}
+
+# Test Results
+
+con_lab <- lm(con22_pct ~ con18_pct + pa22, data = lab_matched, weights = weights)
+con_ld <- lm(con22_pct ~ con18_pct + pa22, data = ld_matched, weights = weights)
+con_grn <- lm(con22_pct ~ con18_pct + pa22, data = green_matched, weights = weights)
+
+models <- list(
+  "Con Vote\nShare"     = coeftest(conmodel, vcov. = vcovCL, cluster = ~subclass),
+  "Lab Vote\nShare" = coeftest(labmodel, vcov. = vcovCL, cluster = ~subclass),
+  "LD Vote\nShare" = coeftest(ldmodel, vcov. = vcovCL, cluster = ~subclass),
+  "Green Vote\nShare" = coeftest(greenmodel, vcov. = vcovCL, cluster = ~subclass),
+  "Con Vote\nShare (vs Lab)" = coeftest(con_lab, vcov. = vcovCL, cluster = ~subclass),
+  "Con Vote\nShare (vs LD)" = coeftest(con_ld, vcov. = vcovCL, cluster = ~subclass),
+  "Con Vote\nShare (vs Green)" = coeftest(con_grn, vcov. = vcovCL, cluster = ~subclass)
+)
+
+sum <- modelsummary(models,coef_rename = c("con18_pct"="Con 2018 Vote Share",
+                                           "lab18_pct"="Lab 2018 Vote Share",
+                                           "ld18_pct"="LD 2018 Vote Share",
+                                           "green18_pct"="Green 2018 Vote Share",
+                                           "pa22"="One Progressive Candidate"))
+
+sum %>%
+  row_spec(5:6, background = ow_cols('light blue')) %>%
+  kable_styling(latex_options="HOLD_position") %>%
+  column_spec(2:8, width="1.3cm")
+
+
+plot2_data <- data.frame(progressive=c("Labour","Liberal Democrat","Green",
+                                "Labour","Liberal Democrat","Green"),
+                        pa=c(0,0,0,1,1,1),
+                   mean18 = c(mean(analysis$con18_pct[which(analysis$con22_pct>0)]),
+                              mean(analysis$con18_pct[which(analysis$con22_pct>0)]),
+                              mean(analysis$con18_pct[which(analysis$con22_pct>0)]),
+                              mean(analysis$con18_pct[which(analysis$con22_pct>0)]),
+                              mean(analysis$con18_pct[which(analysis$con22_pct>0)]),
+                              mean(analysis$con18_pct[which(analysis$con22_pct>0)])))
+
+plot2_data$pred22 <- NA
+plot2_data$pred22[which((plot2_data$progressive=="Labour")&(plot2_data$pa==0))] <- coef(con_lab)["(Intercept)"] + 
+  coef(con_lab)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)])
+plot2_data$pred22[which((plot2_data$progressive=="Liberal Democrat")&(plot2_data$pa==0))] <- coef(con_ld)["(Intercept)"] + 
+  coef(con_ld)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)])
+plot2_data$pred22[which((plot2_data$progressive=="Green")&(plot2_data$pa==0))] <- coef(con_grn)["(Intercept)"] + 
+  coef(con_grn)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)])
+
+plot2_data$pred22[which((plot2_data$progressive=="Labour")&(plot2_data$pa==1))] <- coef(con_lab)["(Intercept)"] + 
+  coef(con_lab)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)]) + coef(con_lab)["pa22"]
+plot2_data$pred22[which((plot2_data$progressive=="Liberal Democrat")&(plot2_data$pa==1))] <- coef(con_ld)["(Intercept)"] + 
+  coef(con_ld)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)]) + coef(con_ld)["pa22"]
+plot2_data$pred22[which((plot2_data$progressive=="Green")&(plot2_data$pa==1))] <- coef(con_grn)["(Intercept)"] + 
+  coef(con_grn)["con18_pct"]*mean(analysis$con18_pct[which(analysis$con22_pct>0)]) + coef(con_grn)["pa22"]
+
+plot2_data$error <- NA
+plot2_data$error[which((plot2_data$progressive=="Labour"))] <- 0.013993
+plot2_data$error[which((plot2_data$progressive=="Liberal Democrat"))]  <- 0.0388284
+plot2_data$error[which((plot2_data$progressive=="Green"))] <- 0.055750
+
+plot2_data$upper <- plot2_data$pred22 + plot2_data$error
+plot2_data$lower <- plot2_data$pred22 - plot2_data$error
+
+plot2_data$progressive <- factor(plot2_data$progressive, levels=c("Labour","Liberal Democrat","Green"))
+
+ggplot(plot2_data, aes(x=progressive,y=pred22, group=pa, alpha=as.factor(pa)))+
+  geom_col(position="dodge", fill=ow_cols("con")) +
+  geom_errorbar(aes(ymax=upper,ymin=lower),width=0.1,position = position_dodge(width=0.9),
+                show.legend = FALSE) +
+  scale_alpha_manual(values=c(0.6,1),labels=c("No","Yes")) +
+  scale_fill_manual(values=c(ow_cols("con")),guide="none") +
+  labs(alpha="Single\nProgressive\nCandidate",x="Progressive Candidate Party",
+       y="Predicted Vote Share 2022") +
+  scale_y_continuous(labels=scales::percent_format(accuracy=1)) +
+  ggtitle("Effect on Conservative vote share of only one 'progressive' candidate\nstanding, by progressive candidates' party",
+          subtitle = "Causal effect estimated using Coarsened Exact Matching") +
+  geom_vline(xintercept=2.5, lty=2) +
+  geom_text(aes(x=3.25,y=0.35, label="Small sample,\nindicative only"),size=3,show.legend = FALSE) +
+  theme(plot.title = element_text(margin=margin(30,0,0,0)),
+        plot.subtitle = element_text(margin=margin(10,0,10,0)))
+
+```
